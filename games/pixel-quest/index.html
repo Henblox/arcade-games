@@ -101,12 +101,13 @@ const TI = {
   FLAG: 111, POLE: 32,
   WATER_TOP: 33, WATER_BODY: 53,
   LUCKY: 10, LUCKY_USED: 9,
+  LADDER: 51, DOOR_TOP: 130, DOOR_BOTTOM: 150, CLOUD: 154,
 };
 const SOLID = new Set([...TI.GRASS, ...TI.DIRT, TI.PLATFORM, TI.LUCKY, TI.LUCKY_USED]);
 
 // character sprite indices (9 cols per row in characters.png)
 const CCOLS = 9;
-const CI = { PLAYER_IDLE: 0, PLAYER_WALK: 1, ROBOT: [21, 22, 23], BAT: [24, 25], ROLLER: 26 };
+const CI = { PLAYER_IDLE: 0, PLAYER_WALK: 1, ROBOT: [21, 22, 23], BAT: [24, 25], ROLLER: 26, URCHIN: 8 };
 
 // background sprite indices (8 cols per row in backgrounds.png)
 const BCOLS = 8;
@@ -186,20 +187,41 @@ function buildDemoLevel() {
     for (let r = g + 1; r < ROWS; r++) grid[x][r] = TI.DIRT[x % 4];
   }
 
-  // a floating bonus platform on the right shelf, echoing the reference's cloud + chest
+  // a floating bonus platform on the right shelf, with a cloud puff underneath and
+  // a chest on top — echoing the reference's cloud-borne chest
   platforms.push({ x0: 55, x1: 57, y: 6 });
   for (let cx = 55; cx <= 57; cx++) grid[cx][6] = TI.PLATFORM;
+  decor.push({ x: 56, y: 7, tile: TI.CLOUD });
   items.push({ x: 56, y: 5, type: 'chest' });
   enemies.push({ type: 'bat', x: 53, y: 6, minX: 51, maxX: 60 });
 
-  // decoration
+  // a second small cloud drifting near the tall opening plateau
+  decor.push({ x: 8, y: 5, tile: TI.CLOUD });
+
+  // a wooden ladder up the step onto the final flag runway — placed on the lower
+  // column (57) where those rows are open air, climbing up to the shelf at col 58
+  for (let r = colGY[58]; r < colGY[57]; r++) decor.push({ x: 57, y: r, tile: TI.LADDER });
+
+  // a door built into the lower shelf, purely decorative
+  decor.push({ x: 47, y: colGY[47] - 2, tile: TI.DOOR_TOP });
+  decor.push({ x: 47, y: colGY[47] - 1, tile: TI.DOOR_BOTTOM });
+
+  // decoration — dense scattering of trees/bushes/cactus/pine across the whole level
   decor.push({ x: 1, y: colGY[1] - 1, tile: TI.PINE });
   decor.push({ x: 4, y: colGY[4] - 1, tile: TI.CACTUS });
+  decor.push({ x: 10, y: colGY[10] - 1, tile: TI.BUSH });
   decor.push({ x: 13, y: colGY[13] - 1, tile: TI.BUSH });
-  decor.push({ x: 20, y: colGY[20] - 1, tile: 'tree', trunkH: 3, canopyRows: 3, branchSide: 1 });
+  decor.push({ x: 17, y: colGY[17] - 1, tile: TI.PINE });
+  decor.push({ x: 20, y: colGY[20] - 1, tile: 'tree', trunkH: 4, canopyRows: 4, branchSide: 1 });
+  decor.push({ x: 25, y: colGY[25] - 1, tile: TI.BUSH });
   decor.push({ x: 30, y: colGY[30] - 1, tile: TI.BUSH });
+  decor.push({ x: 33, y: colGY[33] - 1, tile: TI.PINE });
+  decor.push({ x: 38, y: colGY[38] - 1, tile: 'tree', trunkH: 2, canopyRows: 2, branchSide: -1 });
+  decor.push({ x: 44, y: colGY[44] - 1, tile: TI.CACTUS });
   decor.push({ x: 49, y: colGY[49] - 1, tile: TI.CACTUS });
+  decor.push({ x: 52, y: colGY[52] - 1, tile: TI.BUSH });
   decor.push({ x: 63, y: colGY[63] - 1, tile: TI.PINE });
+  decor.push({ x: 67, y: colGY[67] - 1, tile: TI.BUSH });
 
   // lucky block, bonked from below for a coin
   grid[16][colGY[16] - 3] = TI.LUCKY;
@@ -207,9 +229,13 @@ function buildDemoLevel() {
   // collectibles
   items.push({ x: 9, y: colGY[9] - 2, type: 'heart' });
   items.push({ x: 12, y: colGY[12] - 2, type: 'key' });
-  items.push({ x: 26, y: colGY[26] - 4, type: 'gem' });
   items.push({ x: 46, y: colGY[46] - 2, type: 'heart' });
-  for (const cx of [8, 23, 24, 33, 34, 41, 62, 65, 66]) items.push({ x: cx, y: colGY[cx] - 2, type: 'coin' });
+  // a rising arc of coins beside the big tree, plus a gem at its peak
+  items.push({ x: 23, y: colGY[23] - 2, type: 'coin' });
+  items.push({ x: 24, y: colGY[24] - 3, type: 'coin' });
+  items.push({ x: 25, y: colGY[25] - 4, type: 'coin' });
+  items.push({ x: 26, y: colGY[26] - 5, type: 'gem' });
+  for (const cx of [8, 33, 34, 41, 62, 65, 66]) items.push({ x: cx, y: colGY[cx] - 2, type: 'coin' });
 
   // hazards — rock spikes on the elevated shelf, forcing a small hop
   hazards.push({ x: 42, y: colGY[42] - 1, type: 'spike' });
@@ -218,7 +244,9 @@ function buildDemoLevel() {
   // patrol enemies
   enemies.push({ type: 'robot', x: 18, y: colGY[18] - 1, minX: 15, maxX: 22 });
   enemies.push({ type: 'roller', x: 30, y: colGY[30] - 1, minX: 27, maxX: 33 });
+  enemies.push({ type: 'urchin', x: 41, y: colGY[41] - 1, minX: 39, maxX: 41 });
   enemies.push({ type: 'robot', x: 50, y: colGY[50] - 1, minX: 48, maxX: 53 });
+  enemies.push({ type: 'urchin', x: 65, y: colGY[65] - 1, minX: 63, maxX: 67 });
 
   // checkpoint signs
   signs.push({ x: 9, y: colGY[9] - 1 });
@@ -229,7 +257,7 @@ function buildDemoLevel() {
   const flagGY = colGY[flagX];
 
   return {
-    widthTiles, theme: THEMES[1], grid, colGY, platforms, hazards, enemies,
+    widthTiles, theme: THEMES[0], grid, colGY, platforms, hazards, enemies,
     items, decor, signs, flagX, flagGY, groundY: GROUND_Y,
     start: { x: 2 * T, y: (colGY[2] - 2) * T },
   };
@@ -563,6 +591,7 @@ function drawWorld() {
     let idx, w = 24, h = 24;
     if (e.type === 'robot') idx = CI.ROBOT[Math.floor((e.t || 0) * 6) % 3];
     else if (e.type === 'bat') idx = CI.BAT[Math.floor((e.t || 0) * 8) % 2];
+    else if (e.type === 'urchin') idx = CI.URCHIN;
     else idx = CI.ROLLER;
     const [sx, sy, sw, sh] = charSrc(idx);
     ctx.save();
