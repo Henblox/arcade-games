@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "coin-dash",
+  "name": "COIN DASH",
+  "author": "Matt",
+  "tagline": "Leap the gaps, grab the coins, dodge the saws",
+  "cover": "cover.png",
+  "controls": ["tap", "space"],
+  "orientation": "landscape",
+  "description": "An endless pixel-platformer runner. Your astronaut auto-runs across crumbling terraces — tap or hit space to jump, tap again to double-jump. Snatch coins and rare blue gems, clear the gaps, and dodge spinning buzzsaws and buzzing bees. One hit ends the run, so how far can you dash? Art by Kenney (CC0)."
+}
