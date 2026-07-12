@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pixel Quest</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0a0a14; overflow: hidden;
+    font-family: 'Courier New', monospace; color: #e8f0ff;
+    -webkit-user-select: none; user-select: none; touch-action: none; }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background:#0a0a14; }
+  canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; background:#8fd6ee; }
+  #hud { position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: space-between;
+    align-items: center; padding: 8px 14px; font-size: 15px; letter-spacing: 0.06em;
+    text-shadow: 2px 2px 0 #000; pointer-events: none; z-index: 5; font-weight: bold; }
+  #hud .grp { display:flex; align-items:center; gap:8px; }
+  #hearts { display:flex; gap:3px; }
+  .icon { display:inline-block; width:20px; height:20px; background-image:url('assets/tiles.png');
+    background-size: 400px auto; image-rendering: pixelated; vertical-align: middle; }
+  #msg { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 14px; background: rgba(4, 5, 15, 0.82); z-index: 10; text-align:center; padding: 20px; }
+  #msg.show { display: flex; }
+  #msg h1 { font-size: 28px; margin: 0; text-shadow: 3px 3px 0 #000; letter-spacing:0.05em; }
+  #msg p { margin: 0; opacity: 0.85; font-size: 14px; }
+  button.big { font: inherit; font-weight:bold; padding: 12px 22px; border: 3px solid #2dd4ff;
+    background: #0a0a14; color: #2dd4ff; border-radius: 8px; cursor: pointer; font-size: 15px;
+    letter-spacing: 0.08em; box-shadow: 0 0 12px rgba(45,212,255,0.5); }
+  button.big:active { transform: translateY(1px); }
+  #touch { position: fixed; inset: 0; z-index: 4; pointer-events: none; display:none; }
+  #touch.on { display:block; }
+  .tbtn { position: absolute; bottom: 22px; width: 68px; height: 68px; border-radius: 50%;
+    background: rgba(45,212,255,0.16); border: 3px solid rgba(45,212,255,0.55);
+    display: flex; align-items: center; justify-content: center; font-size: 26px; color: #dff8ff;
+    pointer-events: auto; }
+  #left { left: 18px; } #right { left: 96px; } #jump { right: 18px; }
+  #startHint { position:fixed; bottom:10px; left:0; right:0; text-align:center; font-size:11px;
+    opacity:0.6; letter-spacing:0.08em; pointer-events:none; z-index:5; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="hud">
+  <div class="grp"><span class="icon" id="coinIcon"></span><span id="score">0</span></div>
+  <div class="grp" id="hearts"></div>
+  <div class="grp"><span>LVL <span id="lvl">1</span>/3</span></div>
+</div>
+<div id="startHint">ARROWS / WASD TO MOVE &middot; SPACE TO JUMP &middot; ESC TO EXIT</div>
+<div id="touch">
+  <div class="tbtn" id="left">&#9664;</div>
+  <div class="tbtn" id="right">&#9654;</div>
+  <div class="tbtn" id="jump">&#9650;</div>
+</div>
+<div id="msg">
+  <h1 id="msgTitle">PIXEL QUEST</h1>
+  <p id="msgSub">Reach the flag. Avoid spikes, saws and bots. Collect coins &amp; gems.</p>
+  <button class="big" id="msgBtn">START</button>
+</div>
+
+<script>
+(function () {
+'use strict';
+
+// ---------- Host protocol (Oyster Arcade cabinet) ----------
+function post(type, payload) {
+  try { parent.postMessage({ protocol: 'oyster-arcade', v: 1, type, payload }, '*'); } catch (_) {}
+}
+addEventListener('keydown', (e) => { if (e.key === 'Escape') post('arcade-close'); });
+
+// ---------- Setup ----------
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const tilesImg = new Image(); tilesImg.src = 'assets/tiles.png';
+const charsImg = new Image(); charsImg.src = 'assets/characters.png';
+const bgImg = new Image(); bgImg.src = 'assets/backgrounds.png';
+let assetsReady = 0;
+[tilesImg, charsImg, bgImg].forEach(im => im.addEventListener('load', () => { assetsReady++; if (assetsReady === 3) boot(); }));
+
+const T = 18;      // native tile px (tiles.png)
+const CH = 24;     // native character px (characters.png)
+const ROWS = 15;
+const GROUND_Y = 11; // first solid ground row
+const VIEW_H = ROWS * T; // 270 world px tall, whole level height always visible
+
+// tile indices (20 cols per row in tiles.png)
+const TCOLS = 20;
+const TI = {
+  GRASS: [0, 1, 2, 3],
+  DIRT: [4, 5, 24, 25],
+  PLATFORM: 13,
+  SPIKE: 64,
+  COIN: 151,
+  GEM: 67,
+  HEART: 44,
+  KEY: 27,
+  CHEST: 30,
+  SIGN: 85,
+  CANOPY_TOP: [17, 18, 19], CANOPY_MID: [37, 38, 39],
+  TRUNK_CAP: 117, TRUNK: 137, BRANCH_LEAF: 99,
+  BUSH: 124, PINE: 126, CACTUS: 127,
+  FLAG: 111, POLE: 32,
+  WATER_TOP: 33, WATER_BODY: 53,
+  LUCKY: 10, LUCKY_USED: 9,
+};
+const SOLID = new Set([...TI.GRASS, ...TI.DIRT, TI.PLATFORM, TI.LUCKY, TI.LUCKY_USED]);
+
+// character sprite indices (9 cols per row in characters.png)
+const CCOLS = 9;
+const CI = { PLAYER_IDLE: 0, PLAYER_WALK: 1, ROBOT: [21, 22, 23], BAT: [24, 25], ROLLER: 26 };
+
+// background sprite indices (8 cols per row in backgrounds.png)
+const BCOLS = 8;
+const THEMES = [
+  { sky: 0, hill: 8, ground: 16 },  // icy blue
+  { sky: 6, hill: 14, ground: 22 }, // green forest
+  { sky: 4, hill: 12, ground: 20 }, // sunset
+];
+
+function tileSrc(idx) { return [(idx % TCOLS) * T, Math.floor(idx / TCOLS) * T, T, T]; }
+function charSrc(idx) { return [(idx % CCOLS) * CH, Math.floor(idx / CCOLS) * CH, CH, CH]; }
+function bgSrc(idx) { return [(idx % BCOLS) * CH, Math.floor(idx / BCOLS) * CH, CH, CH]; }
+
+// Bake each background tile onto its own small canvas so repeated horizontal
+// tiling never bleeds pixels from a neighbouring atlas tile at scaled/rounded coords.
+const bakedBg = new Map();
+function bakedBgTile(idx) {
+  let c = bakedBg.get(idx);
+  if (!c) {
+    const [sx, sy, sw, sh] = bgSrc(idx);
+    c = document.createElement('canvas');
+    c.width = sw; c.height = sh;
+    const cctx = c.getContext('2d');
+    cctx.imageSmoothingEnabled = false;
+    cctx.drawImage(bgImg, sx, sy, sw, sh, 0, 0, sw, sh);
+    bakedBg.set(idx, c);
+  }
+  return c;
+}
+
+// Same isolation trick for the tiles atlas: guarantees crisp abutting edges
+// between adjacent ground/platform tiles with zero neighbour bleed.
+const bakedTiles = new Map();
+function bakedTile(idx) {
+  let c = bakedTiles.get(idx);
+  if (!c) {
+    const [sx, sy, sw, sh] = tileSrc(idx);
+    c = document.createElement('canvas');
+    c.width = sw; c.height = sh;
+    const cctx = c.getContext('2d');
+    cctx.imageSmoothingEnabled = false;
+    cctx.drawImage(tilesImg, sx, sy, sw, sh, 0, 0, sw, sh);
+    bakedTiles.set(idx, c);
+  }
+  return c;
+}
+
+// ---------- deterministic RNG ----------
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ---------- Level generation ----------
+// Ground height (gy) can step up/down between chunks, so the terrain reads as
+// stepped cliffs rather than one flat line; gaps are pits with no floor at all.
+function genLevel(seed, themeIdx, widthTiles, diff) {
+  const rng = mulberry32(seed);
+  const grid = Array.from({ length: widthTiles }, () => new Array(ROWS).fill(-1));
+  const colGY = new Array(widthTiles).fill(-1); // ground row per column, -1 = gap
+  const platforms = [];   // {x0,x1,y}
+  const hazards = [];     // {x,y,type}
+  const enemies = [];     // {type,x,y,minX,maxX}
+  const items = [];       // {x,y,type}
+  const decor = [];       // {x,y,tile}
+  const signs = [];       // {x,y} checkpoints
+  const GY_MIN = 5, GY_MAX = 13;
+
+  const markGround = (x0, len, gy) => { for (let i = 0; i < len; i++) if (x0 + i < widthTiles) colGY[x0 + i] = gy; };
+
+  let x = 6; // safe flat runway at start
+  markGround(0, x, GROUND_Y);
+  let gy = GROUND_Y;
+  let lastWasGap = false;
+  const maxGap = Math.min(3, 2 + diff);
+  while (x < widthTiles - 10) {
+    const roll = rng();
+    if (!lastWasGap && roll < 0.11) {
+      // a one-off step up or down: reads as a little cliff/stair in the terrain
+      const delta = (rng() < 0.5 ? -1 : 1) * (rng() < 0.7 ? 1 : 2);
+      gy = Math.max(GY_MIN, Math.min(GY_MAX, gy + delta));
+      const len = 2 + Math.floor(rng() * 2);
+      markGround(x, len, gy);
+      x += len;
+      lastWasGap = false;
+      continue;
+    }
+    if (!lastWasGap && roll < 0.24 + diff * 0.02) {
+      // gap, optionally bridged by a platform if wide
+      const w = 2 + Math.floor(rng() * maxGap - 1 + 1); // 2..maxGap
+      const gw = Math.max(2, Math.min(maxGap, w));
+      if (gw >= 3) {
+        const py = gy - 3 - Math.floor(rng() * 2);
+        platforms.push({ x0: x + Math.floor(gw / 2) - 1, x1: x + Math.floor(gw / 2) + 1, y: py });
+        for (let i = -1; i <= 1; i++) items.push({ x: x + Math.floor(gw / 2) + i, y: py - 1, type: 'coin' });
+      } else {
+        for (let i = 0; i < gw; i++) items.push({ x: x + i, y: gy - 2, type: 'coin' });
+      }
+      x += gw + 2;
+      lastWasGap = true;
+      continue;
+    }
+    lastWasGap = false;
+
+    if (roll < 0.36 + diff * 0.02) {
+      // floating platform run with coins/gem, reachable, height varies
+      const len = 2 + Math.floor(rng() * 3);
+      const py = gy - 3 - Math.floor(rng() * 3);
+      platforms.push({ x0: x, x1: x + len - 1, y: py });
+      markGround(x, len, gy);
+      for (let i = 0; i < len; i++) {
+        if (rng() < 0.7) items.push({ x: x + i, y: py - 1, type: rng() < 0.15 ? 'gem' : 'coin' });
+      }
+      if (rng() < 0.35 && diff > 0) {
+        enemies.push({ type: 'bat', x: x + len / 2, y: py - 3, minX: x - 2, maxX: x + len + 2 });
+      }
+      x += len + 2 + Math.floor(rng() * 3);
+    } else if (roll < 0.46 + diff * 0.02) {
+      // a lucky block: bonk it from below to pop a coin
+      markGround(x, 3, gy);
+      const ly = gy - 3 - Math.floor(rng() * 2);
+      grid[x + 1][ly] = TI.LUCKY;
+      x += 4;
+    } else if (roll < 0.58 + diff * 0.02) {
+      // spike hazard patch on flat ground
+      const len = 1 + Math.floor(rng() * 2);
+      markGround(x, len + 4, gy);
+      for (let i = 0; i < len; i++) hazards.push({ x: x + i, y: gy - 1, type: 'spike' });
+      // escape coins arcing above
+      items.push({ x: x + Math.floor(len / 2), y: gy - 3, type: 'coin' });
+      x += len + 4;
+    } else if (roll < 0.72 + diff * 0.02) {
+      // ground patrol enemy
+      const len = 4 + Math.floor(rng() * 3);
+      markGround(x, len + 3, gy);
+      const type = rng() < 0.5 ? 'robot' : 'roller';
+      enemies.push({ type, x: x + len / 2, y: gy - 1, minX: x, maxX: x + len });
+      x += len + 3;
+    } else if (roll < 0.80) {
+      // decoration cluster
+      const len = 2 + Math.floor(rng() * 3);
+      markGround(x, len, gy);
+      const kind = [TI.PINE, TI.CACTUS, TI.BUSH][Math.floor(rng() * 3)];
+      decor.push({ x, y: gy - 1, tile: kind });
+      if (rng() < 0.4) items.push({ x, y: gy - 2, type: 'coin' });
+      x += len;
+    } else if (roll < 0.86) {
+      // heart pickup (rare)
+      const len = 3 + Math.floor(rng() * 3);
+      markGround(x, len, gy);
+      items.push({ x, y: gy - 2, type: 'heart' });
+      x += len;
+    } else {
+      // plain ground with a coin trail
+      const len = 3 + Math.floor(rng() * 4);
+      markGround(x, len, gy);
+      for (let i = 0; i < len; i++) if (rng() < 0.5) items.push({ x: x + i, y: gy - 2, type: 'coin' });
+      x += len;
+    }
+
+    if (x > 4 && (x % 24) < 3 && rng() < 0.9) signs.push({ x, y: gy - 1 });
+  }
+
+  // flat, predictable runway leading up to the flag
+  gy = GROUND_Y;
+  markGround(x, widthTiles - x, gy);
+
+  // one key + chest bonus pair somewhere in the middle third
+  const kx = Math.floor(widthTiles * 0.4);
+  items.push({ x: kx, y: colGY[kx] - 2, type: 'key' });
+  const cx = Math.floor(widthTiles * 0.72);
+  items.push({ x: cx, y: colGY[cx] - 1, type: 'chest' });
+
+  const flagX = widthTiles - 4;
+  const flagGY = colGY[flagX];
+
+  // build solid grid from the per-column ground heights + platforms
+  for (let cx2 = 0; cx2 < widthTiles; cx2++) {
+    const g = colGY[cx2];
+    if (g < 0) continue;
+    grid[cx2][g] = TI.GRASS[cx2 % 4];
+    for (let r = g + 1; r < ROWS; r++) grid[cx2][r] = TI.DIRT[cx2 % 4];
+  }
+  for (const p of platforms) {
+    for (let cx3 = p.x0; cx3 <= p.x1; cx3++) if (cx3 >= 0 && cx3 < widthTiles) grid[cx3][p.y] = TI.PLATFORM;
+  }
+  // trees decorating the skyline occasionally (purely visual, not persisted in grid)
+  for (let i = 8; i < widthTiles - 8; i += 9 + Math.floor(rng() * 6)) {
+    if (colGY[i] >= 0) {
+      decor.push({
+        x: i, y: colGY[i] - 1, tile: 'tree',
+        trunkH: 2 + Math.floor(rng() * 2),
+        canopyRows: 2 + Math.floor(rng() * 2),
+        branchSide: rng() < 0.5 ? -1 : 1,
+      });
+    }
+  }
+
+  return {
+    widthTiles, theme: THEMES[themeIdx], grid, colGY, platforms, hazards, enemies,
+    items, decor, signs, flagX, flagGY, groundY: GROUND_Y,
+    start: { x: 3 * T, y: (GROUND_Y - 2) * T },
+  };
+}
+
+const LEVELS = [
+  { seed: 1337, theme: 0, width: 90, diff: 0 },
+  { seed: 4242, theme: 1, width: 120, diff: 1 },
+  { seed: 9911, theme: 2, width: 150, diff: 2 },
+];
+
+// ---------- Game state ----------
+let level, levelIdx = 0, score = 0, lives = 3, running = false, paused = false;
+let camX = 0, zoom = 2;
+let checkpoint = null;
+let invuln = 0;
+let flashScore = [];
+
+const keys = {};
+addEventListener('keydown', (e) => {
+  keys[e.key.toLowerCase()] = true;
+  if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(e.key.toLowerCase())) e.preventDefault();
+});
+addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+function isLeft() { return keys['arrowleft'] || keys['a']; }
+function isRight() { return keys['arrowright'] || keys['d']; }
+function isJump() { return keys[' '] || keys['arrowup'] || keys['w']; }
+
+// touch controls
+const touchState = { left: false, right: false, jump: false };
+function bindTouch(id, key) {
+  const el = document.getElementById(id);
+  const on = (e) => { e.preventDefault(); touchState[key] = true; };
+  const off = (e) => { e.preventDefault(); touchState[key] = false; };
+  el.addEventListener('touchstart', on, { passive: false });
+  el.addEventListener('touchend', off, { passive: false });
+  el.addEventListener('touchcancel', off, { passive: false });
+  el.addEventListener('mousedown', on);
+  addEventListener('mouseup', off);
+}
+if ('ontouchstart' in window) {
+  document.getElementById('touch').classList.add('on');
+}
+bindTouch('left', 'left'); bindTouch('right', 'right'); bindTouch('jump', 'jump');
+
+const player = {
+  x: 0, y: 0, w: 16, h: 22, vx: 0, vy: 0, onGround: false, facing: 1, walkT: 0, dead: false,
+};
+
+const GRAVITY = 1500, JUMP_VEL = -440, MOVE_ACC = 1100, MAX_VX = 150, FRICTION = 1400, MAX_FALL = 620;
+
+function solidAt(tx, ty) {
+  if (ty < 0 || ty >= ROWS) return false;
+  if (tx < 0) return true; // left wall keeps player in bounds
+  if (tx >= level.widthTiles) return false; // open past the flag
+  const v = level.grid[tx][ty];
+  return v >= 0 && SOLID.has(v);
+}
+
+function rectHitsSolid(x, y, w, h) {
+  const tx0 = Math.floor(x / T), tx1 = Math.floor((x + w - 1) / T);
+  const ty0 = Math.floor(y / T), ty1 = Math.floor((y + h - 1) / T);
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) if (solidAt(tx, ty)) return true;
+  return false;
+}
+
+function resetPlayerToCheckpoint() {
+  player.x = checkpoint.x; player.y = checkpoint.y; player.vx = 0; player.vy = 0;
+  invuln = 1.6;
+}
+
+function loseLife() {
+  if (invuln > 0) return;
+  lives--;
+  updateHearts();
+  if (lives <= 0) { gameOver(false); return; }
+  resetPlayerToCheckpoint();
+}
+
+function bonkLuckyBlocks(ty) {
+  if (ty < 0 || ty >= ROWS) return;
+  const tx0 = Math.floor(player.x / T), tx1 = Math.floor((player.x + player.w - 1) / T);
+  for (let tx = tx0; tx <= tx1; tx++) {
+    if (tx < 0 || tx >= level.widthTiles) continue;
+    if (level.grid[tx][ty] === TI.LUCKY) {
+      level.grid[tx][ty] = TI.LUCKY_USED;
+      score += 20;
+      document.getElementById('score').textContent = score;
+      flashScore.push({ x: tx * T, y: ty * T, t: 1, txt: '+20' });
+    }
+  }
+}
+
+function collectItem(it) {
+  const px = it.x * T, py = it.y * T;
+  if (Math.abs((player.x + player.w / 2) - (px + T / 2)) < T * 0.9 &&
+      Math.abs((player.y + player.h / 2) - (py + T / 2)) < T * 0.9) {
+    it.done = true;
+    let pts = 0;
+    if (it.type === 'coin') pts = 10;
+    else if (it.type === 'gem') pts = 50;
+    else if (it.type === 'key') pts = 75;
+    else if (it.type === 'chest') pts = 150;
+    else if (it.type === 'heart') { if (lives < 5) { lives++; updateHearts(); } pts = 25; }
+    score += pts;
+    if (pts) flashScore.push({ x: px, y: py, t: 1, txt: '+' + pts });
+    document.getElementById('score').textContent = score;
+  }
+}
+
+function iconPos(idx) { return `-${(idx % TCOLS) * 20}px -${Math.floor(idx / TCOLS) * 20}px`; }
+document.getElementById('coinIcon').style.backgroundPosition = iconPos(TI.COIN);
+
+function updateHearts() {
+  const el = document.getElementById('hearts');
+  el.innerHTML = '';
+  for (let i = 0; i < lives; i++) {
+    const s = document.createElement('span');
+    s.className = 'icon';
+    s.style.backgroundPosition = iconPos(TI.HEART);
+    el.appendChild(s);
+  }
+}
+
+// ---------- enemies ----------
+function stepEnemies(dt) {
+  for (const e of level.enemies) {
+    if (e.dead) continue;
+    e.t = (e.t || 0) + dt;
+    const speed = e.type === 'bat' ? 40 : 28;
+    e.dir = e.dir || 1;
+    e.x += (e.dir * speed * dt) / T;
+    if (e.x < e.minX) { e.x = e.minX; e.dir = 1; }
+    if (e.x > e.maxX) { e.x = e.maxX; e.dir = -1; }
+    const ex = e.x * T, ey = (e.type === 'bat' ? e.y + Math.sin(e.t * 3) * 0.6 : e.y) * T;
+    const ew = 16, eh = 16;
+    const ox = ex - ew / 2, oy = ey - eh + T;
+    // collision with player
+    if (invuln <= 0 && player.x < ox + ew && player.x + player.w > ox && player.y < oy + eh && player.y + player.h > oy) {
+      const stomp = player.vy > 60 && (player.y + player.h) - oy < 10 && e.type !== 'bat' || (e.type === 'bat' && player.vy > 60 && (player.y + player.h) - oy < 10);
+      if (stomp) {
+        e.dead = true; player.vy = -260; score += 30; flashScore.push({ x: ox, y: oy, t: 1, txt: '+30' });
+        document.getElementById('score').textContent = score;
+      } else {
+        loseLife();
+      }
+    }
+  }
+}
+
+function stepHazards() {
+  for (const h of level.hazards) {
+    const hx = h.x * T + 3, hy = h.y * T + 6, hw = T - 6, hh = T - 6;
+    if (invuln <= 0 && player.x < hx + hw && player.x + player.w > hx && player.y < hy + hh && player.y + player.h > hy) loseLife();
+  }
+}
+
+// ---------- main update ----------
+let last = 0;
+function update(dt) {
+  const left = isLeft() || touchState.left, right = isRight() || touchState.right, jump = isJump() || touchState.jump;
+
+  if (left && !right) { player.vx -= MOVE_ACC * dt; player.facing = -1; }
+  else if (right && !left) { player.vx += MOVE_ACC * dt; player.facing = 1; }
+  else {
+    if (player.vx > 0) player.vx = Math.max(0, player.vx - FRICTION * dt);
+    else if (player.vx < 0) player.vx = Math.min(0, player.vx + FRICTION * dt);
+  }
+  player.vx = Math.max(-MAX_VX, Math.min(MAX_VX, player.vx));
+
+  if (jump && player.onGround) { player.vy = JUMP_VEL; player.onGround = false; }
+  if (!jump && player.vy < -150) player.vy = -150; // short hop cut
+
+  player.vy += GRAVITY * dt;
+  if (player.vy > MAX_FALL) player.vy = MAX_FALL;
+
+  // move X
+  let nx = player.x + player.vx * dt;
+  if (player.vx !== 0) {
+    if (rectHitsSolid(nx, player.y, player.w, player.h)) {
+      const tx = player.vx > 0 ? Math.floor((nx + player.w - 1) / T) : Math.floor(nx / T);
+      nx = player.vx > 0 ? tx * T - player.w : (tx + 1) * T;
+      player.vx = 0;
+    }
+    player.x = nx;
+  }
+  // move Y
+  let ny = player.y + player.vy * dt;
+  player.onGround = false;
+  if (player.vy !== 0) {
+    if (rectHitsSolid(player.x, ny, player.w, player.h)) {
+      const ty = player.vy > 0 ? Math.floor((ny + player.h - 1) / T) : Math.floor(ny / T);
+      if (player.vy > 0) { ny = ty * T - player.h; player.onGround = true; }
+      else {
+        ny = (ty + 1) * T;
+        bonkLuckyBlocks(ty);
+      }
+      player.vy = 0;
+    }
+    player.y = ny;
+  }
+
+  if (Math.abs(player.vx) > 5) player.walkT += dt;
+
+  // checkpoints
+  for (const s of level.signs) {
+    if (Math.abs(player.x - s.x * T) < T && player.onGround) {
+      const cxp = s.x * T, cyp = (s.y - 1) * T;
+      if (!checkpoint || cxp > checkpoint.x) checkpoint = { x: cxp, y: cyp };
+    }
+  }
+
+  // items
+  for (const it of level.items) if (!it.done) collectItem(it);
+
+  stepEnemies(dt);
+  stepHazards();
+
+  // fell into void
+  if (player.y > VIEW_H + 60) loseLife();
+
+  // flag
+  if (player.x > level.flagX * T) levelComplete();
+
+  if (invuln > 0) invuln -= dt;
+
+  camX = player.x + player.w / 2 - (cv.width / zoom) / 2;
+  camX = Math.max(0, Math.min(camX, Math.max(0, level.widthTiles * T - cv.width / zoom)));
+
+  for (const f of flashScore) f.t -= dt;
+  flashScore = flashScore.filter(f => f.t > 0);
+}
+
+// ---------- rendering ----------
+function drawBgBand(idx, worldY, h, parallax) {
+  const tile = bakedBgTile(idx);
+  const scrollX = camX * parallax;
+  const startTileX = Math.floor(scrollX / CH) - 1;
+  const endTileX = Math.ceil((scrollX + cv.width / zoom) / CH) + 1;
+  const y = Math.round(worldY), rh = Math.round(h);
+  for (let i = startTileX; i <= endTileX; i++) {
+    const dx = Math.round(i * CH - scrollX);
+    ctx.drawImage(tile, dx, y, CH, rh);
+  }
+}
+
+function drawTile(idx, x, y, w, h) {
+  ctx.drawImage(bakedTile(idx), Math.round(x), Math.round(y), w || T, h || T);
+}
+
+function drawWorld() {
+  const th = level.theme;
+  camX = Math.round(camX);
+  ctx.fillStyle = '#5fcde4';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  drawBgBand(th.sky, 0, VIEW_H * 0.55, 0.15);
+  drawBgBand(th.hill, VIEW_H * 0.40, VIEW_H * 0.30, 0.4);
+  drawBgBand(th.ground, VIEW_H * 0.62, VIEW_H * 0.5, 0.65);
+
+  const tx0 = Math.max(0, Math.floor(camX / T) - 1);
+  const tx1 = Math.min(level.widthTiles - 1, Math.ceil((camX + cv.width / zoom) / T) + 1);
+
+  // decorations (behind)
+  for (const d of level.decor) {
+    if (d.x < tx0 - 2 || d.x > tx1 + 2) continue;
+    const dx = d.x * T - camX;
+    if (d.tile === 'tree') {
+      const trunkH = d.trunkH, canopyRows = d.canopyRows;
+      // trunk: straight bark tiles topped by a canopy-notch cap
+      for (let i = 0; i < trunkH; i++) {
+        const idx = i === trunkH - 1 ? TI.TRUNK_CAP : TI.TRUNK;
+        drawTile(idx, dx, (d.y - i) * T);
+      }
+      // branch with a leaf tuft poking out partway up the trunk
+      if (trunkH > 2) {
+        ctx.save();
+        if (d.branchSide < 0) { ctx.translate(dx + T / 2, 0); ctx.scale(-1, 1); ctx.translate(-dx - T / 2, 0); }
+        drawTile(TI.BRANCH_LEAF, dx + (d.branchSide > 0 ? T : -T), (d.y - 1) * T);
+        ctx.restore();
+      }
+      // canopy: a blocky 3-wide crown sitting on top of the trunk
+      const canopyBottom = d.y - trunkH;
+      for (let r = 0; r < canopyRows; r++) {
+        const row = r === 0 ? TI.CANOPY_TOP : TI.CANOPY_MID;
+        const cy = (canopyBottom - canopyRows + 1 + r) * T;
+        for (let c = 0; c < 3; c++) drawTile(row[c], dx + (c - 1) * T, cy);
+      }
+    } else {
+      drawTile(d.tile, dx, d.y * T);
+    }
+  }
+
+  // ground/platform tiles
+  for (let tx = tx0; tx <= tx1; tx++) {
+    for (let ty = 0; ty < ROWS; ty++) {
+      const v = level.grid[tx][ty];
+      if (v < 0) continue;
+      drawTile(v, tx * T - camX, ty * T);
+    }
+  }
+
+  // hazards
+  for (const h of level.hazards) {
+    if (h.x < tx0 - 1 || h.x > tx1 + 1) continue;
+    drawTile(TI.SPIKE, h.x * T - camX, h.y * T);
+  }
+
+  // signs (checkpoints)
+  for (const s of level.signs) {
+    if (s.x < tx0 - 1 || s.x > tx1 + 1) continue;
+    drawTile(TI.SIGN, s.x * T - camX, (s.y - 1) * T);
+  }
+
+  // flag
+  {
+    const fx = level.flagX, fgy = level.flagGY;
+    for (let r = fgy - 4; r < fgy; r++) drawTile(TI.POLE, fx * T - camX, r * T);
+    drawTile(TI.FLAG, fx * T - camX, (fgy - 4) * T);
+  }
+
+  // items
+  for (const it of level.items) {
+    if (it.done || it.x < tx0 - 1 || it.x > tx1 + 1) continue;
+    const bob = Math.sin(performance.now() / 300 + it.x) * 2;
+    const idx = it.type === 'coin' ? TI.COIN : it.type === 'gem' ? TI.GEM : it.type === 'heart' ? TI.HEART : it.type === 'key' ? TI.KEY : TI.CHEST;
+    drawTile(idx, it.x * T - camX, it.y * T + bob);
+  }
+
+  // enemies
+  for (const e of level.enemies) {
+    if (e.dead) continue;
+    const ex = e.x * T - camX, eyBase = (e.type === 'bat' ? e.y + Math.sin((e.t || 0) * 3) * 0.6 : e.y) * T;
+    let idx, w = 24, h = 24;
+    if (e.type === 'robot') idx = CI.ROBOT[Math.floor((e.t || 0) * 6) % 3];
+    else if (e.type === 'bat') idx = CI.BAT[Math.floor((e.t || 0) * 8) % 2];
+    else idx = CI.ROLLER;
+    const [sx, sy, sw, sh] = charSrc(idx);
+    ctx.save();
+    if (e.dir < 0) { ctx.translate(ex + w / 2, 0); ctx.scale(-1, 1); ctx.translate(-ex - w / 2, 0); }
+    ctx.drawImage(charsImg, sx, sy, sw, sh, ex - w / 2, eyBase - h + T, w, h);
+    ctx.restore();
+  }
+
+  // player
+  {
+    const idx = player.onGround && Math.abs(player.vx) > 5 ? (Math.floor(player.walkT * 8) % 2 === 0 ? CI.PLAYER_IDLE : CI.PLAYER_WALK) : CI.PLAYER_IDLE;
+    const [sx, sy, sw, sh] = charSrc(idx);
+    const drawX = player.x - camX - (CH - player.w) / 2;
+    const drawY = player.y - (CH - player.h) + 2;
+    if (invuln <= 0 || Math.floor(performance.now() / 90) % 2 === 0) {
+      ctx.save();
+      if (player.facing < 0) { ctx.translate(drawX + CH / 2, 0); ctx.scale(-1, 1); ctx.translate(-drawX - CH / 2, 0); }
+      ctx.drawImage(charsImg, sx, sy, sw, sh, drawX, drawY, CH, CH);
+      ctx.restore();
+    }
+  }
+
+  // floating score text
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  for (const f of flashScore) {
+    ctx.fillStyle = `rgba(255,230,80,${Math.max(0, f.t)})`;
+    ctx.fillText(f.txt, f.x - camX + T / 2, f.y - (1 - f.t) * 14);
+  }
+}
+
+function resize() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const wrapW = window.innerWidth, wrapH = window.innerHeight;
+  cv.style.width = wrapW + 'px'; cv.style.height = wrapH + 'px';
+  cv.width = Math.round(wrapW * dpr); cv.height = Math.round(wrapH * dpr);
+  zoom = (cv.height / VIEW_H);
+  ctx.setTransform(zoom, 0, 0, zoom, 0, 0);
+}
+addEventListener('resize', resize);
+
+function frame(t) {
+  if (!last) last = t;
+  const dt = Math.min(0.033, (t - last) / 1000);
+  last = t;
+  if (running && !paused) update(dt);
+  if (level) drawWorld();
+  requestAnimationFrame(frame);
+}
+
+// ---------- flow ----------
+function loadLevel(i) {
+  const L = LEVELS[i];
+  level = genLevel(L.seed, L.theme, L.width, L.diff);
+  player.x = level.start.x; player.y = level.start.y; player.vx = 0; player.vy = 0;
+  checkpoint = { x: level.start.x, y: level.start.y };
+  invuln = 0.8;
+  document.getElementById('lvl').textContent = i + 1;
+}
+
+function startGame() {
+  score = 0; lives = 3; levelIdx = 0;
+  document.getElementById('score').textContent = 0;
+  updateHearts();
+  loadLevel(0);
+  running = true; paused = false;
+  hideMsg();
+}
+
+function levelComplete() {
+  if (!running) return;
+  running = false;
+  score += 500 + lives * 100;
+  document.getElementById('score').textContent = score;
+  if (levelIdx < LEVELS.length - 1) {
+    showMsg('LEVEL ' + (levelIdx + 1) + ' CLEAR!', 'Score bonus banked. Get ready for the next world.', 'CONTINUE', () => {
+      levelIdx++;
+      loadLevel(levelIdx);
+      running = true;
+      hideMsg();
+    });
+  } else {
+    showMsg('YOU WIN!', 'Final score: ' + score, 'PLAY AGAIN', startGame);
+    post('arcade-score', { value: score });
+  }
+}
+
+function gameOver() {
+  running = false;
+  showMsg('GAME OVER', 'Final score: ' + score, 'TRY AGAIN', startGame);
+  post('arcade-score', { value: score });
+}
+
+function showMsg(title, sub, btn, onClick) {
+  document.getElementById('msgTitle').textContent = title;
+  document.getElementById('msgSub').textContent = sub;
+  const b = document.getElementById('msgBtn');
+  b.textContent = btn;
+  b.onclick = onClick;
+  document.getElementById('msg').classList.add('show');
+}
+function hideMsg() { document.getElementById('msg').classList.remove('show'); }
+
+function boot() {
+  resize();
+  updateHearts();
+  showMsg('PIXEL QUEST', 'Reach the flag. Avoid spikes, saws and bots. Collect coins & gems.', 'START', startGame);
+  requestAnimationFrame(frame);
+  post('arcade-ready');
+}
+})();
+</script>
+</body>
+</html>
