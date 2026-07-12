@@ -42,7 +42,6 @@
 <div id="hud">
   <div class="grp"><span class="icon" id="coinIcon"></span><span id="score">0</span></div>
   <div class="grp" id="hearts"></div>
-  <div class="grp"><span>LVL <span id="lvl">1</span>/3</span></div>
 </div>
 <div id="startHint">ARROWS / WASD TO MOVE &middot; SPACE TO JUMP &middot; ESC TO EXIT</div>
 <div id="touch">
@@ -52,7 +51,7 @@
 </div>
 <div id="msg">
   <h1 id="msgTitle">PIXEL QUEST</h1>
-  <p id="msgSub">Reach the flag. Avoid spikes, saws and bots. Collect coins &amp; gems.</p>
+  <p id="msgSub">Reach the flag. Avoid rock spikes and bots. Collect coins &amp; gems.</p>
   <button class="big" id="msgBtn">START</button>
 </div>
 
@@ -89,7 +88,7 @@ const TI = {
   GRASS: [0, 1, 2, 3],
   DIRT: [4, 5, 24, 25],
   PLATFORM: 13,
-  SPIKE: 64,
+  SPIKE: 68,
   COIN: 151,
   GEM: 67,
   HEART: 44,
@@ -155,157 +154,89 @@ function bakedTile(idx) {
   return c;
 }
 
-// ---------- deterministic RNG ----------
-function mulberry32(a) {
-  return function () {
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// ---------- Level generation ----------
-// The ground is ONE continuous, connected landmass end to end — like the
-// Kenney reference art, elevation changes (cliffs/stairs) are what make it
-// interesting, not pits. Nothing ever floats disconnected in open air.
-function genLevel(seed, themeIdx, widthTiles, diff) {
-  const rng = mulberry32(seed);
+// ---------- The demo level ----------
+// One hand-built level (no random generator) laid out to echo the Kenney
+// reference screenshot: a tall stepped plateau on the left, a big central
+// tree, a floating bonus platform, and an elevated run out to the flag.
+function buildDemoLevel() {
+  const widthTiles = 72;
   const grid = Array.from({ length: widthTiles }, () => new Array(ROWS).fill(-1));
-  const colGY = new Array(widthTiles).fill(-1); // ground row per column, continuous end to end
-  const platforms = [];   // {x0,x1,y}
-  const hazards = [];     // {x,y,type}
-  const enemies = [];     // {type,x,y,minX,maxX}
-  const items = [];       // {x,y,type}
-  const decor = [];       // {x,y,tile}
-  const signs = [];       // {x,y} checkpoints
-  const GY_MIN = 6, GY_MAX = 12;
+  const colGY = new Array(widthTiles).fill(-1);
+  const platforms = [];
+  const hazards = [];
+  const enemies = [];
+  const items = [];
+  const decor = [];
+  const signs = [];
 
-  const markGround = (x0, len, gyv) => { for (let i = 0; i < len; i++) if (x0 + i < widthTiles) colGY[x0 + i] = gyv; };
-
-  let x = 6; // safe flat runway at start
-  markGround(0, x, GROUND_Y);
-  let gy = GROUND_Y;
-  while (x < widthTiles - 10) {
-    const roll = rng();
-
-    if (roll < 0.22) {
-      // a step up or down: a little cliff/stair in the terrain, ground never breaks
-      const delta = (rng() < 0.5 ? -1 : 1) * (rng() < 0.65 ? 1 : 2);
-      gy = Math.max(GY_MIN, Math.min(GY_MAX, gy + delta));
-      const len = 2 + Math.floor(rng() * 2);
-      markGround(x, len, gy);
-      x += len;
-    } else if (roll < 0.32 + diff * 0.02) {
-      // a small bonus ledge above the path — always sits over solid ground
-      const len = 1 + Math.floor(rng() * 2);
-      const py = gy - 3 - Math.floor(rng() * 2);
-      const span = len + 3;
-      platforms.push({ x0: x, x1: x + len - 1, y: py });
-      markGround(x, span, gy);
-      for (let i = 0; i < len; i++) items.push({ x: x + i, y: py - 1, type: rng() < 0.2 ? 'gem' : 'coin' });
-      if (rng() < 0.3 && diff > 0) {
-        enemies.push({ type: 'bat', x: x + len / 2, y: py - 3, minX: x - 2, maxX: x + len + 2 });
-      }
-      x += span;
-    } else if (roll < 0.44 + diff * 0.02) {
-      // a lucky block: bonk it from below to pop a coin
-      markGround(x, 4, gy);
-      const ly = gy - 3 - Math.floor(rng() * 2);
-      grid[x + 1][ly] = TI.LUCKY;
-      x += 4;
-    } else if (roll < 0.56 + diff * 0.02) {
-      // spike hazard patch on flat ground
-      const len = 1 + Math.floor(rng() * 2);
-      markGround(x, len + 4, gy);
-      for (let i = 0; i < len; i++) hazards.push({ x: x + i, y: gy - 1, type: 'spike' });
-      // escape coins arcing above
-      items.push({ x: x + Math.floor(len / 2), y: gy - 3, type: 'coin' });
-      x += len + 4;
-    } else if (roll < 0.70 + diff * 0.02) {
-      // ground patrol enemy
-      const len = 4 + Math.floor(rng() * 3);
-      markGround(x, len + 3, gy);
-      const type = rng() < 0.5 ? 'robot' : 'roller';
-      enemies.push({ type, x: x + len / 2, y: gy - 1, minX: x, maxX: x + len });
-      x += len + 3;
-    } else if (roll < 0.80) {
-      // decoration cluster
-      const len = 2 + Math.floor(rng() * 3);
-      markGround(x, len, gy);
-      const kind = [TI.PINE, TI.CACTUS, TI.BUSH][Math.floor(rng() * 3)];
-      decor.push({ x, y: gy - 1, tile: kind });
-      if (rng() < 0.4) items.push({ x, y: gy - 2, type: 'coin' });
-      x += len;
-    } else if (roll < 0.87) {
-      // heart pickup (rare)
-      const len = 3 + Math.floor(rng() * 3);
-      markGround(x, len, gy);
-      items.push({ x, y: gy - 2, type: 'heart' });
-      x += len;
-    } else {
-      // plain ground with a coin trail
-      const len = 3 + Math.floor(rng() * 4);
-      markGround(x, len, gy);
-      for (let i = 0; i < len; i++) if (rng() < 0.5) items.push({ x: x + i, y: gy - 2, type: 'coin' });
-      x += len;
-    }
-
-    // place on the column we just finished marking, so its height always matches the actual ground there
-    const signX = x - 1;
-    if (signX > 4 && (signX % 24) < 3 && rng() < 0.9) signs.push({ x: signX, y: gy - 1 });
+  // per-column ground height (row index; lower number = higher up)
+  const segs = [
+    [6, 7], [2, 9], [2, 11], [26, 11], [2, 9], [8, 9], [2, 11], [10, 11], [2, 9], [12, 9],
+  ];
+  let cursor = 0;
+  for (const [len, gy] of segs) {
+    for (let i = 0; i < len; i++) colGY[cursor + i] = gy;
+    cursor += len;
   }
 
-  // flat, predictable runway leading up to the flag
-  gy = GROUND_Y;
-  markGround(x, widthTiles - x, gy);
+  for (let x = 0; x < widthTiles; x++) {
+    const g = colGY[x];
+    if (g < 0) continue;
+    grid[x][g] = TI.GRASS[x % 4];
+    for (let r = g + 1; r < ROWS; r++) grid[x][r] = TI.DIRT[x % 4];
+  }
 
-  // one key + chest bonus pair somewhere in the middle third
-  const kx = Math.floor(widthTiles * 0.4);
-  items.push({ x: kx, y: colGY[kx] - 2, type: 'key' });
-  const cx = Math.floor(widthTiles * 0.72);
-  items.push({ x: cx, y: colGY[cx] - 1, type: 'chest' });
+  // a floating bonus platform on the right shelf, echoing the reference's cloud + chest
+  platforms.push({ x0: 55, x1: 57, y: 6 });
+  for (let cx = 55; cx <= 57; cx++) grid[cx][6] = TI.PLATFORM;
+  items.push({ x: 56, y: 5, type: 'chest' });
+  enemies.push({ type: 'bat', x: 53, y: 6, minX: 51, maxX: 60 });
 
-  const flagX = widthTiles - 4;
+  // decoration
+  decor.push({ x: 1, y: colGY[1] - 1, tile: TI.PINE });
+  decor.push({ x: 4, y: colGY[4] - 1, tile: TI.CACTUS });
+  decor.push({ x: 13, y: colGY[13] - 1, tile: TI.BUSH });
+  decor.push({ x: 20, y: colGY[20] - 1, tile: 'tree', trunkH: 3, canopyRows: 3, branchSide: 1 });
+  decor.push({ x: 30, y: colGY[30] - 1, tile: TI.BUSH });
+  decor.push({ x: 49, y: colGY[49] - 1, tile: TI.CACTUS });
+  decor.push({ x: 63, y: colGY[63] - 1, tile: TI.PINE });
+
+  // lucky block, bonked from below for a coin
+  grid[16][colGY[16] - 3] = TI.LUCKY;
+
+  // collectibles
+  items.push({ x: 9, y: colGY[9] - 2, type: 'heart' });
+  items.push({ x: 12, y: colGY[12] - 2, type: 'key' });
+  items.push({ x: 26, y: colGY[26] - 4, type: 'gem' });
+  items.push({ x: 46, y: colGY[46] - 2, type: 'heart' });
+  for (const cx of [8, 23, 24, 33, 34, 41, 62, 65, 66]) items.push({ x: cx, y: colGY[cx] - 2, type: 'coin' });
+
+  // hazards — rock spikes on the elevated shelf, forcing a small hop
+  hazards.push({ x: 42, y: colGY[42] - 1, type: 'spike' });
+  hazards.push({ x: 43, y: colGY[43] - 1, type: 'spike' });
+
+  // patrol enemies
+  enemies.push({ type: 'robot', x: 18, y: colGY[18] - 1, minX: 15, maxX: 22 });
+  enemies.push({ type: 'roller', x: 30, y: colGY[30] - 1, minX: 27, maxX: 33 });
+  enemies.push({ type: 'robot', x: 50, y: colGY[50] - 1, minX: 48, maxX: 53 });
+
+  // checkpoint signs
+  signs.push({ x: 9, y: colGY[9] - 1 });
+  signs.push({ x: 37, y: colGY[37] - 1 });
+  signs.push({ x: 60, y: colGY[60] - 1 });
+
+  const flagX = widthTiles - 3;
   const flagGY = colGY[flagX];
 
-  // build solid grid from the per-column ground heights + platforms
-  for (let cx2 = 0; cx2 < widthTiles; cx2++) {
-    const g = colGY[cx2];
-    if (g < 0) continue;
-    grid[cx2][g] = TI.GRASS[cx2 % 4];
-    for (let r = g + 1; r < ROWS; r++) grid[cx2][r] = TI.DIRT[cx2 % 4];
-  }
-  for (const p of platforms) {
-    for (let cx3 = p.x0; cx3 <= p.x1; cx3++) if (cx3 >= 0 && cx3 < widthTiles) grid[cx3][p.y] = TI.PLATFORM;
-  }
-  // trees decorating the skyline occasionally (purely visual, not persisted in grid)
-  for (let i = 8; i < widthTiles - 8; i += 9 + Math.floor(rng() * 6)) {
-    if (colGY[i] >= 0) {
-      decor.push({
-        x: i, y: colGY[i] - 1, tile: 'tree',
-        trunkH: 2 + Math.floor(rng() * 2),
-        canopyRows: 2 + Math.floor(rng() * 2),
-        branchSide: rng() < 0.5 ? -1 : 1,
-      });
-    }
-  }
-
   return {
-    widthTiles, theme: THEMES[themeIdx], grid, colGY, platforms, hazards, enemies,
+    widthTiles, theme: THEMES[1], grid, colGY, platforms, hazards, enemies,
     items, decor, signs, flagX, flagGY, groundY: GROUND_Y,
-    start: { x: 3 * T, y: (GROUND_Y - 2) * T },
+    start: { x: 2 * T, y: (colGY[2] - 2) * T },
   };
 }
 
-const LEVELS = [
-  { seed: 1337, theme: 1, width: 90, diff: 0 },  // grassland (green)
-  { seed: 4242, theme: 0, width: 120, diff: 1 }, // icy
-  { seed: 9911, theme: 2, width: 150, diff: 2 }, // sunset
-];
-
 // ---------- Game state ----------
-let level, levelIdx = 0, score = 0, lives = 3, running = false, paused = false;
+let level, score = 0, lives = 3, running = false, paused = false;
 let camX = 0, zoom = 2;
 let checkpoint = null;
 let invuln = 0;
@@ -683,20 +614,18 @@ function frame(t) {
 }
 
 // ---------- flow ----------
-function loadLevel(i) {
-  const L = LEVELS[i];
-  level = genLevel(L.seed, L.theme, L.width, L.diff);
+function loadLevel() {
+  level = buildDemoLevel();
   player.x = level.start.x; player.y = level.start.y; player.vx = 0; player.vy = 0;
   checkpoint = { x: level.start.x, y: level.start.y };
   invuln = 0.8;
-  document.getElementById('lvl').textContent = i + 1;
 }
 
 function startGame() {
-  score = 0; lives = 3; levelIdx = 0;
+  score = 0; lives = 3;
   document.getElementById('score').textContent = 0;
   updateHearts();
-  loadLevel(0);
+  loadLevel();
   running = true; paused = false;
   hideMsg();
 }
@@ -706,17 +635,8 @@ function levelComplete() {
   running = false;
   score += 500 + lives * 100;
   document.getElementById('score').textContent = score;
-  if (levelIdx < LEVELS.length - 1) {
-    showMsg('LEVEL ' + (levelIdx + 1) + ' CLEAR!', 'Score bonus banked. Get ready for the next world.', 'CONTINUE', () => {
-      levelIdx++;
-      loadLevel(levelIdx);
-      running = true;
-      hideMsg();
-    });
-  } else {
-    showMsg('YOU WIN!', 'Final score: ' + score, 'PLAY AGAIN', startGame);
-    post('arcade-score', { value: score });
-  }
+  showMsg('YOU WIN!', 'Final score: ' + score, 'PLAY AGAIN', startGame);
+  post('arcade-score', { value: score });
 }
 
 function gameOver() {
@@ -738,7 +658,7 @@ function hideMsg() { document.getElementById('msg').classList.remove('show'); }
 function boot() {
   resize();
   updateHearts();
-  showMsg('PIXEL QUEST', 'Reach the flag. Avoid spikes, saws and bots. Collect coins & gems.', 'START', startGame);
+  showMsg('PIXEL QUEST', 'Reach the flag. Avoid rock spikes and bots. Collect coins & gems.', 'START', startGame);
   requestAnimationFrame(frame);
   post('arcade-ready');
 }

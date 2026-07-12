@@ -3,9 +3,9 @@
   "id": "pixel-quest",
   "name": "PIXEL QUEST",
   "author": "Matthew",
-  "tagline": "Run, jump and collect gems across 3 pixel-art worlds",
+  "tagline": "Run, jump and collect gems in a pixel-art grassland",
   "cover": "cover.png",
   "controls": ["arrows", "tap"],
   "orientation": "landscape",
-  "description": "A retro side-scrolling platformer built with Kenney's CC0 Pixel Platformer art. Guide your hero through grasslands, forest and sunset levels, dodge spikes, saws, bots and bats, grab coins, gems and hearts, and reach the flag before your lives run out."
+  "description": "A retro side-scrolling platformer built with Kenney's CC0 Pixel Platformer art. Guide your hero across a stepped grassland, dodge rock spikes and patrolling bots, bonk a lucky block, grab coins, gems and hearts, and reach the flag before your lives run out."
 }
