@@ -97,7 +97,7 @@ const TI = {
   CHEST: 30,
   SIGN: 85,
   CANOPY_TOP: [17, 18, 19], CANOPY_MID: [37, 38, 39],
-  TRUNK_CAP: 117, TRUNK: 137, BRANCH_LEAF: 99,
+  TRUNK_CAP: 117, TRUNK: 137, TRUNK_BRANCH: 96,
   BUSH: 124, PINE: 126, CACTUS: 127,
   FLAG: 111, POLE: 32,
   WATER_TOP: 33, WATER_BODY: 53,
@@ -562,17 +562,20 @@ function drawWorld() {
     const dx = d.x * T - camX;
     if (d.tile === 'tree') {
       const trunkH = d.trunkH, canopyRows = d.canopyRows;
-      // trunk: straight bark tiles topped by a canopy-notch cap
+      // trunk: straight bark tiles topped by a canopy-notch cap; one segment is
+      // swapped for a trunk+leaf-bud piece so the branch is part of the same
+      // sprite as the trunk (no seam) instead of a separate tile floating beside it
+      const branchRow = trunkH > 2 ? 1 : -1;
       for (let i = 0; i < trunkH; i++) {
-        const idx = i === trunkH - 1 ? TI.TRUNK_CAP : TI.TRUNK;
-        drawTile(idx, dx, (d.y - i) * T);
-      }
-      // branch with a leaf tuft poking out partway up the trunk
-      if (trunkH > 2) {
-        ctx.save();
-        if (d.branchSide < 0) { ctx.translate(dx + T / 2, 0); ctx.scale(-1, 1); ctx.translate(-dx - T / 2, 0); }
-        drawTile(TI.BRANCH_LEAF, dx + (d.branchSide > 0 ? T : -T), (d.y - 1) * T);
-        ctx.restore();
+        const idx = i === trunkH - 1 ? TI.TRUNK_CAP : i === branchRow ? TI.TRUNK_BRANCH : TI.TRUNK;
+        if (i === branchRow && d.branchSide < 0) {
+          ctx.save();
+          ctx.translate(dx + T / 2, 0); ctx.scale(-1, 1); ctx.translate(-dx - T / 2, 0);
+          drawTile(idx, dx, (d.y - i) * T);
+          ctx.restore();
+        } else {
+          drawTile(idx, dx, (d.y - i) * T);
+        }
       }
       // canopy: a blocky 3-wide crown sitting on top of the trunk
       const canopyBottom = d.y - trunkH;
