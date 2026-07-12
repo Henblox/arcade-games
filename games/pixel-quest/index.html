@@ -166,76 +166,55 @@ function mulberry32(a) {
 }
 
 // ---------- Level generation ----------
-// Ground height (gy) can step up/down between chunks, so the terrain reads as
-// stepped cliffs rather than one flat line; gaps are pits with no floor at all.
+// The ground is ONE continuous, connected landmass end to end — like the
+// Kenney reference art, elevation changes (cliffs/stairs) are what make it
+// interesting, not pits. Nothing ever floats disconnected in open air.
 function genLevel(seed, themeIdx, widthTiles, diff) {
   const rng = mulberry32(seed);
   const grid = Array.from({ length: widthTiles }, () => new Array(ROWS).fill(-1));
-  const colGY = new Array(widthTiles).fill(-1); // ground row per column, -1 = gap
+  const colGY = new Array(widthTiles).fill(-1); // ground row per column, continuous end to end
   const platforms = [];   // {x0,x1,y}
   const hazards = [];     // {x,y,type}
   const enemies = [];     // {type,x,y,minX,maxX}
   const items = [];       // {x,y,type}
   const decor = [];       // {x,y,tile}
   const signs = [];       // {x,y} checkpoints
-  const GY_MIN = 5, GY_MAX = 13;
+  const GY_MIN = 6, GY_MAX = 12;
 
-  const markGround = (x0, len, gy) => { for (let i = 0; i < len; i++) if (x0 + i < widthTiles) colGY[x0 + i] = gy; };
+  const markGround = (x0, len, gyv) => { for (let i = 0; i < len; i++) if (x0 + i < widthTiles) colGY[x0 + i] = gyv; };
 
   let x = 6; // safe flat runway at start
   markGround(0, x, GROUND_Y);
   let gy = GROUND_Y;
-  let lastWasGap = false;
-  const maxGap = Math.min(3, 2 + diff);
   while (x < widthTiles - 10) {
     const roll = rng();
-    if (!lastWasGap && roll < 0.11) {
-      // a one-off step up or down: reads as a little cliff/stair in the terrain
-      const delta = (rng() < 0.5 ? -1 : 1) * (rng() < 0.7 ? 1 : 2);
+
+    if (roll < 0.22) {
+      // a step up or down: a little cliff/stair in the terrain, ground never breaks
+      const delta = (rng() < 0.5 ? -1 : 1) * (rng() < 0.65 ? 1 : 2);
       gy = Math.max(GY_MIN, Math.min(GY_MAX, gy + delta));
       const len = 2 + Math.floor(rng() * 2);
       markGround(x, len, gy);
       x += len;
-      lastWasGap = false;
-      continue;
-    }
-    if (!lastWasGap && roll < 0.24 + diff * 0.02) {
-      // gap, optionally bridged by a platform if wide
-      const w = 2 + Math.floor(rng() * maxGap - 1 + 1); // 2..maxGap
-      const gw = Math.max(2, Math.min(maxGap, w));
-      if (gw >= 3) {
-        const py = gy - 3 - Math.floor(rng() * 2);
-        platforms.push({ x0: x + Math.floor(gw / 2) - 1, x1: x + Math.floor(gw / 2) + 1, y: py });
-        for (let i = -1; i <= 1; i++) items.push({ x: x + Math.floor(gw / 2) + i, y: py - 1, type: 'coin' });
-      } else {
-        for (let i = 0; i < gw; i++) items.push({ x: x + i, y: gy - 2, type: 'coin' });
-      }
-      x += gw + 2;
-      lastWasGap = true;
-      continue;
-    }
-    lastWasGap = false;
-
-    if (roll < 0.36 + diff * 0.02) {
-      // floating platform run with coins/gem, reachable, height varies
-      const len = 2 + Math.floor(rng() * 3);
-      const py = gy - 3 - Math.floor(rng() * 3);
+    } else if (roll < 0.32 + diff * 0.02) {
+      // a small bonus ledge above the path — always sits over solid ground
+      const len = 1 + Math.floor(rng() * 2);
+      const py = gy - 3 - Math.floor(rng() * 2);
+      const span = len + 3;
       platforms.push({ x0: x, x1: x + len - 1, y: py });
-      markGround(x, len, gy);
-      for (let i = 0; i < len; i++) {
-        if (rng() < 0.7) items.push({ x: x + i, y: py - 1, type: rng() < 0.15 ? 'gem' : 'coin' });
-      }
-      if (rng() < 0.35 && diff > 0) {
+      markGround(x, span, gy);
+      for (let i = 0; i < len; i++) items.push({ x: x + i, y: py - 1, type: rng() < 0.2 ? 'gem' : 'coin' });
+      if (rng() < 0.3 && diff > 0) {
         enemies.push({ type: 'bat', x: x + len / 2, y: py - 3, minX: x - 2, maxX: x + len + 2 });
       }
-      x += len + 2 + Math.floor(rng() * 3);
-    } else if (roll < 0.46 + diff * 0.02) {
+      x += span;
+    } else if (roll < 0.44 + diff * 0.02) {
       // a lucky block: bonk it from below to pop a coin
-      markGround(x, 3, gy);
+      markGround(x, 4, gy);
       const ly = gy - 3 - Math.floor(rng() * 2);
       grid[x + 1][ly] = TI.LUCKY;
       x += 4;
-    } else if (roll < 0.58 + diff * 0.02) {
+    } else if (roll < 0.56 + diff * 0.02) {
       // spike hazard patch on flat ground
       const len = 1 + Math.floor(rng() * 2);
       markGround(x, len + 4, gy);
@@ -243,7 +222,7 @@ function genLevel(seed, themeIdx, widthTiles, diff) {
       // escape coins arcing above
       items.push({ x: x + Math.floor(len / 2), y: gy - 3, type: 'coin' });
       x += len + 4;
-    } else if (roll < 0.72 + diff * 0.02) {
+    } else if (roll < 0.70 + diff * 0.02) {
       // ground patrol enemy
       const len = 4 + Math.floor(rng() * 3);
       markGround(x, len + 3, gy);
@@ -258,7 +237,7 @@ function genLevel(seed, themeIdx, widthTiles, diff) {
       decor.push({ x, y: gy - 1, tile: kind });
       if (rng() < 0.4) items.push({ x, y: gy - 2, type: 'coin' });
       x += len;
-    } else if (roll < 0.86) {
+    } else if (roll < 0.87) {
       // heart pickup (rare)
       const len = 3 + Math.floor(rng() * 3);
       markGround(x, len, gy);
@@ -272,7 +251,9 @@ function genLevel(seed, themeIdx, widthTiles, diff) {
       x += len;
     }
 
-    if (x > 4 && (x % 24) < 3 && rng() < 0.9) signs.push({ x, y: gy - 1 });
+    // place on the column we just finished marking, so its height always matches the actual ground there
+    const signX = x - 1;
+    if (signX > 4 && (signX % 24) < 3 && rng() < 0.9) signs.push({ x: signX, y: gy - 1 });
   }
 
   // flat, predictable runway leading up to the flag
@@ -318,9 +299,9 @@ function genLevel(seed, themeIdx, widthTiles, diff) {
 }
 
 const LEVELS = [
-  { seed: 1337, theme: 0, width: 90, diff: 0 },
-  { seed: 4242, theme: 1, width: 120, diff: 1 },
-  { seed: 9911, theme: 2, width: 150, diff: 2 },
+  { seed: 1337, theme: 1, width: 90, diff: 0 },  // grassland (green)
+  { seed: 4242, theme: 0, width: 120, diff: 1 }, // icy
+  { seed: 9911, theme: 2, width: 150, diff: 2 }, // sunset
 ];
 
 // ---------- Game state ----------
